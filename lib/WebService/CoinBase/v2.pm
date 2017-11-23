@@ -22,8 +22,14 @@ use LWP::Authen::OAuth2;
 
 has cbversion    => ( is => 'ro', default => '2017-01-09' );
 
-has api_id       => ( is => 'ro', required => 1 );
-has api_secret   => ( is => 'ro', required => 1 );
+has conf => (
+	is	=> 'ro',
+	default => "$ENV{'HOME'}/.coinbase.conf",
+	required => 0,
+);
+
+has api_id       => ( is => 'rw', required => 0 );
+has api_secret   => ( is => 'rw', required => 0 );
 has token_string => ( is => 'rw', required => 0 );
 
 has api_base => (
@@ -45,30 +51,23 @@ has oobredir => (
 	default => 'urn:ietf:wg:oauth:2.0:oob',
 );
 
-has conf => (
-	is	=> 'ro',
-	default => "$ENV{'HOME'}/.coinbase.conf",
-	required => 0,
-);
-
 has scopes => ( is => 'ro', required => 1 );
 has reqlimit => ( is => 'rw', required => 0, default => '2' );
 
-sub save_tokens {
-	my ($me) = @_;
-        my $parsed = $me->parse_json($me->token_string, 'token_string');
-	my $conf = $me->conf;
-
-        open(T,">${conf}.tmp");
-        foreach my $line (($me->api_id,$me->api_secret,$me->token_string)) {
-                print T $line."\n";
-        }
-        close(T);
-	rename("${conf}.tmp",$conf);
-}
-
 sub parse_json {
         my ($me, $str,$name) = @_;
+
+	if (!defined($str)) {
+		my $count = 0;
+		foreach my $arg (@_) {
+			if (!defined($arg)) {
+				$arg = "<undef>";
+			}
+			printf "parse_json[%2d]: arg %s('%s')\n",
+				$count++,ref($arg),$arg;
+		}
+		return undef;
+	}
 
 	if (!defined($me->{json})) {
 		$me->{json} = JSON->new->allow_nonref;
@@ -95,7 +94,10 @@ sub get_accounts {
 }
 
 sub get {
-	my ($me, $url) = @_;
+	my ($me, $call) = @_;
+
+	my $url = $me->api_base . $call;
+	my $oa = $me->oauth2;
 
 	my %headers;
 	$headers{'CB-VERSION'}=$me->cbversion;
@@ -105,7 +107,7 @@ sub get {
 	my $last_cursor_id;
 
 	while(1) {
-        if (0) {
+        if (1) {
                 printf "Starting round after %d items", $last_cursor_pos;
                 if (defined($last_cursor_id)) {
                         printf " after id %s", $last_cursor_id;
@@ -120,16 +122,23 @@ sub get {
                 $parms.="&starting_after=${last_cursor_id}";
         }
 
-        my $res = $me->oauth2()->get(${url}.${parms}, %headers);
+
+        my $res;
+	eval {
+		$res = $oa->get(${url}.${parms}, %headers);
+	};
+	if ($@) {
+		die "WebService::CoinBase::v2::get ${url}${parms} failed! $@";
+	}
         if (!defined($res)) {
-                die "get ${url}${parms} failed!";
+                die "WebService::CoinBase::v2::get ${url}${parms} failed!";
         }
         if (! $res->is_success) {
                 print Dumper($res);
                 die $res->status_line;
         }
 
-        my $parsed = parse_json($res->decoded_content, 'GET ${url}${parms}');
+        my $parsed = $me->parse_json($res->decoded_content, 'GET ${url}${parms}');
         #printf "parsed is a %s\n", $parsed;
         push @responses, $parsed;
 
@@ -170,6 +179,21 @@ sub oauth2 {
 		return $me->{oauth2};
 	}
 
+	my ($id,$secret,$token_string);
+	open(N,$me->conf);
+	chomp($id = <N>);
+	chomp($secret = <N>);
+	my $tmpstr = <N>;
+	if (defined($tmpstr)) {
+        	chomp($token_string = $tmpstr);
+        	$tmpstr = <N>;
+	}
+	close(N);
+
+	$me->api_id($id);
+	$me->api_secret($secret);
+	$me->token_string($token_string);
+
 	$me->{oauth2} = LWP::Authen::OAuth2->new(
 		client_id => $me->api_id,
 		client_secret => $me->api_secret,
@@ -179,13 +203,26 @@ sub oauth2 {
 		#service_provider => 'CoinBase',
 		# - vs -
 		authorization_endpoint => $me->oauth_base."/authorize",
-		token_endpoint => $me->oauth_base."/token?redirect_uri=".
-		    $me->oobredir,
+		token_endpoint => $me->oauth_base."/token?redirect_uri=".$me->oobredir,
 		# XXX implement a http server for localhost:<randomport> to
 		#     like rclone
 		# }
 
-		save_tokens => \&{$me->save_tokens},
+		save_tokens => sub {
+			my ($token_string, $me) = @_;
+			$me->token_string($token_string);
+			if (!defined($me->token_string)) {
+				return;
+			}
+			my $conf = $me->conf;
+
+        		open(T,">${conf}.tmp");
+        		foreach my $line (($me->api_id,$me->api_secret,$me->token_string)) {
+                		print T $line."\n";
+        		}
+        		close(T);
+			rename("${conf}.tmp",$conf);
+		},
 		save_tokens_args => [ $me ],
 
 		token_string => $me->token_string,
@@ -208,11 +245,13 @@ sub oauth2 {
 		printf "Go visit this url: %s\n", $url;
 		print "Enter code: ";
 		my $code;
-		chomp($code = <main::stdin>);
+		open(IN,"/dev/tty");
+		chomp($code = <IN>);
+		close(IN);
 
 		my $res;
 		eval {
-			$res = $me->{oauth2}->request_toens(
+			$res = $me->{oauth2}->request_tokens(
 					grant_type => 'authorization_code',
 					code => $code,
 					client_id => $me->api_id,
@@ -224,6 +263,7 @@ sub oauth2 {
 			exit(1);
 		}
 	}
+	$me->token_string($me->oauth2()->token_string);
 	return $me->{oauth2};
 }
 
