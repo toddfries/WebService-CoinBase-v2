@@ -19,6 +19,7 @@ use Moose;
 with 'WebService::Client';
 
 use LWP::Authen::OAuth2;
+use Data::Dumper;
 
 has cbversion    => ( is => 'ro', default => '2017-01-09' );
 
@@ -55,7 +56,7 @@ has scopes => ( is => 'ro', required => 1 );
 has reqlimit => ( is => 'rw', required => 0, default => '2' );
 
 sub parse_json {
-        my ($me, $str,$name) = @_;
+	my ($me, $str,$name) = @_;
 
 	if (!defined($str)) {
 		my $count = 0;
@@ -73,103 +74,111 @@ sub parse_json {
 		$me->{json} = JSON->new->allow_nonref;
 	}
 
-        my $parsed;
-        eval {
-                $parsed = $me->{json}->decode( $str );
-        };
-        if ($@) {
-                die("%s: json->decode('%s') Error %s\n", $name, $str, $@);
-                return undef;
-        }
-        if (0) {
-                printf "Pretty %s: %s\n", $name,
+	my $parsed;
+	eval {
+		$parsed = $me->{json}->decode( $str );
+	};
+	if ($@) {
+		die("%s: json->decode('%s') Error %s\n", $name, $str, $@);
+		return undef;
+	}
+	if (0) {
+		printf "Pretty %s: %s\n", $name,
 		    $me->{json}->pretty->encode( $parsed)."\n";
-        }
-        return $parsed;
-}
-
-sub get_accounts {
-	my ($me) = @_;
-	$me->get('/accounts');
+	}
+	return $parsed;
 }
 
 sub get {
 	my ($me, $call) = @_;
 
 	my $url = $me->api_base . $call;
-	my $oa = $me->oauth2;
 
 	my %headers;
 	$headers{'CB-VERSION'}=$me->cbversion;
 
+	if ($call =~ /^\/(prices)/) {
+		my $parsed = $me->oaget(${url}, %headers);
+		#print Dumper($parsed);
+		return $parsed;
+	}
+
 	my @responses;
 	my $last_cursor_pos = 0;
 	my $last_cursor_id;
-
 	while(1) {
-        if (1) {
-                printf "Starting round after %d items", $last_cursor_pos;
-                if (defined($last_cursor_id)) {
-                        printf " after id %s", $last_cursor_id;
-                }
-                print "\n";
-        }
+	if (0) {
+		printf "Starting round after %d items", $last_cursor_pos;
+		if (defined($last_cursor_id)) {
+			printf " after id %s", $last_cursor_id;
+		}
+		print "\n";
+	}
 
 	my $limit = $me->reqlimit; # 25 (default), 0 - 100
 	my $order = "asc"; # desc (newest 1st, default), asc (oldest 1st)
-        my $parms = "?limit=${limit}&order=${order}";
-        if (defined($last_cursor_id)) {
-                $parms.="&starting_after=${last_cursor_id}";
-        }
-
-
-        my $res;
-	eval {
-		$res = $oa->get(${url}.${parms}, %headers);
-	};
-	if ($@) {
-		die "WebService::CoinBase::v2::get ${url}${parms} failed! $@";
+	my $parms = "?limit=${limit}&order=${order}";
+	if (defined($last_cursor_id)) {
+		$parms.="&starting_after=${last_cursor_id}";
 	}
-        if (!defined($res)) {
-                die "WebService::CoinBase::v2::get ${url}${parms} failed!";
-        }
-        if (! $res->is_success) {
-                print Dumper($res);
-                die $res->status_line;
-        }
 
-        my $parsed = $me->parse_json($res->decoded_content, 'GET ${url}${parms}');
-        #printf "parsed is a %s\n", $parsed;
-        push @responses, $parsed;
+	my $parsed = $me->oaget(${url}.${parms}, %headers);
+	push @responses, $parsed;
 
-        if (0) {
-                if (defined($parsed->{pagination})) {
-                        foreach my $k (keys %{$parsed->{pagination}}) {
-                                my $val = $parsed->{pagination}->{$k};
-                                if (!defined($val)) {
-                                        $val = "</dev/null>";
-                                }
-                                printf "pagination %s : %s\n", $k, $val;
-                        }
-                }
-        }
-        if (defined($parsed->{data})) {
-                foreach my $k ($parsed->{data}) {
-                        if (ref($k) eq "ARRAY") {
-                                foreach my $l (@{$k}) {
-                                        $last_cursor_pos++;
-                                        $last_cursor_id=$l->{id};
-                                }
-                                next;
-                        }
-                }
-        }
+	if (0) {
+		if (defined($parsed->{pagination})) {
+			foreach my $k (keys %{$parsed->{pagination}}) {
+				my $val = $parsed->{pagination}->{$k};
+				if (!defined($val)) {
+					$val = "</dev/null>";
+				}
+				printf "pagination %s : %s\n", $k, $val;
+			}
+		}
+	}
+	if (defined($parsed->{data})) {
+		foreach my $k ($parsed->{data}) {
+			if (ref($k) eq "ARRAY") {
+				foreach my $l (@{$k}) {
+					$last_cursor_pos++;
+					$last_cursor_id=$l->{id};
+				}
+				next;
+			}
+		}
+	}
 
-        if (!defined($parsed->{pagination}->{next_uri})) {
-                last;
-        }
+	if (!defined($parsed->{pagination}->{next_uri})) {
+		last;
+	}
     }
     return @responses;
+}
+
+sub oaget {
+	my ($me, $url, %headers) = @_;
+
+	my $oa = $me->oauth2;
+
+	my $res;
+	eval {
+		$res = $oa->get(${url}, %headers);
+	};
+	if ($@) {
+		die "WebService::CoinBase::v2::get ${url} failed! $@";
+	}
+       	if (!defined($res)) {
+	       	die "WebService::CoinBase::v2::get ${url} failed!";
+       	}
+       	if (! $res->is_success) {
+	       	print Dumper($res);
+	       	die $res->status_line;
+       	}
+	#printf "get res decoded_content = '%s'\n", $res->decoded_content;
+       	my $parsed = $me->parse_json($res->decoded_content, 'GET ${url}');
+	#printf "get res parsed_content = '%s'\n", $parsed;
+	#print Dumper($parsed);
+	return $parsed;
 }
 
 sub oauth2 {
@@ -185,8 +194,8 @@ sub oauth2 {
 	chomp($secret = <N>);
 	my $tmpstr = <N>;
 	if (defined($tmpstr)) {
-        	chomp($token_string = $tmpstr);
-        	$tmpstr = <N>;
+		chomp($token_string = $tmpstr);
+		$tmpstr = <N>;
 	}
 	close(N);
 
@@ -216,11 +225,11 @@ sub oauth2 {
 			}
 			my $conf = $me->conf;
 
-        		open(T,">${conf}.tmp");
-        		foreach my $line (($me->api_id,$me->api_secret,$me->token_string)) {
-                		print T $line."\n";
-        		}
-        		close(T);
+			open(T,">${conf}.tmp");
+			foreach my $line (($me->api_id,$me->api_secret,$me->token_string)) {
+				print T $line."\n";
+			}
+			close(T);
 			rename("${conf}.tmp",$conf);
 		},
 		save_tokens_args => [ $me ],
@@ -265,6 +274,17 @@ sub oauth2 {
 	}
 	$me->token_string($me->oauth2()->token_string);
 	return $me->{oauth2};
+}
+
+sub get_accounts {
+	my ($me) = @_;
+	$me->get('/accounts');
+}
+
+sub get_spot_price {
+	my ($me,$currency) = @_;
+	my $price = $me->get('/prices/spot?currency='.$currency)->{data}->{amount};
+	return $price;
 }
 
 1;
