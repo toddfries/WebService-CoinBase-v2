@@ -155,6 +155,32 @@ sub get {
     return @responses;
 }
 
+sub post {
+	my ($me, $call, $parms) = @_;
+
+	my $url = $me->api_base . $call;
+
+	my %headers;
+	$headers{'CB-VERSION'}=$me->cbversion;
+
+	my $res;
+	eval {
+		$res = $me->oauth2->post($url, $parms, %headers);
+	};
+	if ($@) {
+		die "WebService::CoinBase::v2::post ${url} failed! $@";
+	}
+	if (!defined($res)) {
+		die "WebService::CoinBase::v2::post ${url} failed! \$res = <undef>";
+	}
+	if (! $res->is_success) {
+		print Dumper($res);
+		die $res->status_line;
+	}
+	my $parsed = $me->parse_json($res->decoded_content, 'POST ${url}');
+	return $parsed;
+}
+
 sub oaget {
 	my ($me, $url, %headers) = @_;
 
@@ -283,8 +309,19 @@ sub get_accounts {
 
 sub get_spot_price {
 	my ($me,$currency) = @_;
-	my $price = $me->get('/prices/spot?currency='.$currency)->{data}->{amount};
-	return $price;
+	$me->get('/prices/spot?currency='.$currency)->{data}->{amount};
+}
+
+sub post_checkouts {
+	my ($me, $amount, $currency, $name, $description) = @_;
+
+	my $parms = { };
+        $parms->{'amount'} = $amount;
+        $parms->{'currency'} = $currency;
+        $parms->{'name'} = $name;
+        $parms->{'description'} = $description;
+
+	$me->post('/checkouts', $parms);
 }
 
 1;
