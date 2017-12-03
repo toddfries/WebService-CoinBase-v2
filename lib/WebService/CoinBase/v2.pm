@@ -15,6 +15,7 @@
 package WebService::CoinBase::v2;
 
 use Moose;
+use MooseX::Params::Validate;
 
 with 'WebService::Client';
 
@@ -53,10 +54,15 @@ has oobredir => (
 );
 
 has scopes => ( is => 'ro', required => 1 );
-has reqlimit => ( is => 'rw', required => 0, default => '2' );
+has reqlimit => ( is => 'rw', required => 0, default => '50' );
 
 sub parse_json {
-	my ($me, $str,$name) = @_;
+	my ($me, %params) = validated_hash( \@_,
+		str => { isa => 'Str', optional => 0 },
+		name => { isa => 'Str', optional => 0 },
+	);
+	my $str = $params{str};
+	my $name = $params{name};
 
 	if (!defined($str)) {
 		my $count = 0;
@@ -90,14 +96,19 @@ sub parse_json {
 }
 
 sub get {
-	my ($me, $call) = @_;
+	my ($me, %params) = validated_hash(\@_,
+		call => { isa => 'Str', optional => 0 },
+		rtype => { isa => 'Str', optional => 1 },
+		parms => { isa => 'Str', optional => 1 },
+	);
+	my $call = $params{call};
 
 	my $url = $me->api_base . $call;
 
 	my %headers;
 	$headers{'CB-VERSION'}=$me->cbversion;
 
-	if ($call =~ /^\/(prices)/) {
+	if (defined($params{rtype}) && $params{rtype} eq "Str") {
 		my $parsed = $me->oaget(${url}, %headers);
 		#print Dumper($parsed);
 		return $parsed;
@@ -118,6 +129,9 @@ sub get {
 	my $limit = $me->reqlimit; # 25 (default), 0 - 100
 	my $order = "asc"; # desc (newest 1st, default), asc (oldest 1st)
 	my $parms = "?limit=${limit}&order=${order}";
+	if (defined($params{parms})) {
+		$parms .= "&".$params{parms};
+	}
 	if (defined($last_cursor_id)) {
 		$parms.="&starting_after=${last_cursor_id}";
 	}
@@ -177,7 +191,10 @@ sub post {
 		print Dumper($res);
 		die $res->status_line;
 	}
-	my $parsed = $me->parse_json($res->decoded_content, 'POST ${url}');
+	my $parsed = $me->parse_json(
+		str => $res->decoded_content,
+		name => 'POST ${url}'
+	);
 	return $parsed;
 }
 
@@ -201,7 +218,10 @@ sub oaget {
 	       	die $res->status_line;
        	}
 	#printf "get res decoded_content = '%s'\n", $res->decoded_content;
-       	my $parsed = $me->parse_json($res->decoded_content, 'GET ${url}');
+       	my $parsed = $me->parse_json(
+		str => $res->decoded_content,
+		name => 'GET ${url}'
+	);
 	#printf "get res parsed_content = '%s'\n", $parsed;
 	#print Dumper($parsed);
 	return $parsed;
@@ -302,14 +322,32 @@ sub oauth2 {
 	return $me->{oauth2};
 }
 
+sub get_scopes {
+	my ($me) = @_;
+
+	if (defined($me->{v}->{scopes})) {
+		return $me->{v}->{scopes};
+	}
+
+	my @res = $me->get_user_auth;
+	my $scope = $res[0];
+	$me->{v}->{scopes} = $scope->{data}->{scopes};
+	return $me->{v}->{scopes};
+}
+
 sub get_accounts {
 	my ($me) = @_;
-	$me->get('/accounts');
+	$me->get(call => '/accounts');
 }
 
 sub get_spot_price {
 	my ($me,$currency) = @_;
-	$me->get('/prices/spot?currency='.$currency)->{data}->{amount};
+	$me->get(call => '/prices/spot', parms => 'currency='.$currency);
+}
+
+sub get_user_auth {
+	my ($me) = @_;
+	$me->get(call => '/user/auth');
 }
 
 sub post_checkouts {
