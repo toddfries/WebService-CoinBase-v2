@@ -110,7 +110,7 @@ sub get {
 
 	if (defined($params{rtype}) && $params{rtype} eq "Str") {
 		my $parsed = $me->oaget(${url}, %headers);
-		#print Dumper($parsed);
+		#print STDERR Dumper($parsed);
 		return $parsed;
 	}
 
@@ -182,13 +182,16 @@ sub post {
 		$res = $me->oauth2->post($url, $parms, %headers);
 	};
 	if ($@) {
-		die "WebService::CoinBase::v2::post ${url} failed! $@";
+		if (defined($res)) {
+			print STDERR Dumper($res);
+		}
+		die "WebService::CoinBase::v2::post ${url} failed!\n$@";
 	}
 	if (!defined($res)) {
 		die "WebService::CoinBase::v2::post ${url} failed! \$res = <undef>";
 	}
 	if (! $res->is_success) {
-		print Dumper($res);
+		print STDERR Dumper($res);
 		die $res->status_line;
 	}
 	my $parsed = $me->parse_json(
@@ -208,13 +211,19 @@ sub oaget {
 		$res = $oa->get(${url}, %headers);
 	};
 	if ($@) {
-		die "WebService::CoinBase::v2::get ${url} failed! $@";
+		if (defined($res)) {
+			print STDERR Dumper($res);
+		}
+		#foreach my $h (keys %headers) {
+		#	printf "oaget: header %s = %s\n", $h, $headers{$h};
+		#}
+		die "WebService::CoinBase::v2::get ${url} failed!\n$@";
 	}
        	if (!defined($res)) {
 	       	die "WebService::CoinBase::v2::get ${url} failed!";
        	}
        	if (! $res->is_success) {
-	       	print Dumper($res);
+	       	print STDERR Dumper($res);
 	       	die $res->status_line;
        	}
 	#printf "get res decoded_content = '%s'\n", $res->decoded_content;
@@ -223,7 +232,7 @@ sub oaget {
 		name => 'GET ${url}'
 	);
 	#printf "get res parsed_content = '%s'\n", $parsed;
-	#print Dumper($parsed);
+	#print STDERR Dumper($parsed);
 	return $parsed;
 }
 
