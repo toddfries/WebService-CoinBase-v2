@@ -23,6 +23,7 @@ use LWP::Authen::OAuth2;
 use Data::Dumper;
 
 has cbversion    => ( is => 'ro', default => '2017-01-09' );
+has debug	 => ( is => 'rw', default => 0 );
 
 has conf => (
 	is	=> 'ro',
@@ -70,8 +71,10 @@ sub parse_json {
 			if (!defined($arg)) {
 				$arg = "<undef>";
 			}
-			printf "parse_json[%2d]: arg %s('%s')\n",
+			if ($me->debug > 0) {
+			    printf STDERR "parse_json[%2d]: arg %s('%s')\n",
 				$count++,ref($arg),$arg;
+			}
 		}
 		return undef;
 	}
@@ -85,10 +88,10 @@ sub parse_json {
 		$parsed = $me->{json}->decode( $str );
 	};
 	if ($@) {
-		die("%s: json->decode('%s') Error %s\n", $name, $str, $@);
+		printf STDERR "%s: json->decode('%s') Error %s\n", $name, $str, $@;
 		return undef;
 	}
-	if (0) {
+	if ($me->debug > 0) {
 		printf "Pretty %s: %s\n", $name,
 		    $me->{json}->pretty->encode( $parsed)."\n";
 	}
@@ -118,17 +121,22 @@ sub get {
 	my $last_cursor_pos = 0;
 	my $last_cursor_id;
 	while(1) {
-	if (0) {
-		printf "Starting round after %d items", $last_cursor_pos;
+	if ($me->debug > 0) {
+		printf STDERR "Starting round after %d items", $last_cursor_pos;
 		if (defined($last_cursor_id)) {
-			printf " after id %s", $last_cursor_id;
+			printf STDERR " after id %s", $last_cursor_id;
 		}
-		print "\n";
+		print STDERR "\n";
 	}
 
 	my $limit = $me->reqlimit; # 25 (default), 0 - 100
 	my $order = "asc"; # desc (newest 1st, default), asc (oldest 1st)
-	my $parms = "?limit=${limit}&order=${order}";
+	my $parms = "";
+	if ($call =~ /\/spot$/) {
+		$parms = "";
+	} else {
+		$parms = "?limit=${limit}&order=${order}";
+	}
 	if (defined($params{parms})) {
 		$parms .= "&".$params{parms};
 	}
@@ -139,14 +147,14 @@ sub get {
 	my $parsed = $me->oaget(${url}.${parms}, %headers);
 	push @responses, $parsed;
 
-	if (0) {
+	if ($me->debug > 0) {
 		if (defined($parsed->{pagination})) {
 			foreach my $k (keys %{$parsed->{pagination}}) {
 				my $val = $parsed->{pagination}->{$k};
 				if (!defined($val)) {
 					$val = "</dev/null>";
 				}
-				printf "pagination %s : %s\n", $k, $val;
+				printf STDERR "pagination %s : %s\n", $k, $val;
 			}
 		}
 	}
@@ -185,14 +193,17 @@ sub post {
 		if (defined($res)) {
 			print STDERR Dumper($res);
 		}
-		die "WebService::CoinBase::v2::post ${url} failed!\n$@";
+		print STDERR "WebService::CoinBase::v2::post ${url} failed!\n$@";
+		return undef;
 	}
 	if (!defined($res)) {
-		die "WebService::CoinBase::v2::post ${url} failed! \$res = <undef>";
+		print STDERR "WebService::CoinBase::v2::post ${url} failed! \$res = <undef>";
+		return undef;
 	}
 	if (! $res->is_success) {
 		print STDERR Dumper($res);
-		die $res->status_line;
+		print STDERR $res->status_line;
+		return undef;
 	}
 	my $parsed = $me->parse_json(
 		str => $res->decoded_content,
@@ -206,6 +217,9 @@ sub oaget {
 
 	my $oa = $me->oauth2;
 
+	#print STDERR Dumper(\%headers);
+	#print STDERR "oa->get(${url}, ...)\n";
+
 	my $res;
 	eval {
 		$res = $oa->get(${url}, %headers);
@@ -217,14 +231,17 @@ sub oaget {
 		#foreach my $h (keys %headers) {
 		#	printf "oaget: header %s = %s\n", $h, $headers{$h};
 		#}
-		die "WebService::CoinBase::v2::get ${url} failed!\n$@";
+		print STDERR "WebService::CoinBase::v2::get ${url} failed!\n$@";
+		return undef;
 	}
        	if (!defined($res)) {
-	       	die "WebService::CoinBase::v2::get ${url} failed!";
+	       	print STDERR "WebService::CoinBase::v2::get ${url} failed!";
+		return undef;
        	}
        	if (! $res->is_success) {
 	       	print STDERR Dumper($res);
-	       	die $res->status_line;
+	       	print STDERR $res->status_line;
+		return undef;
        	}
 	#printf "get res decoded_content = '%s'\n", $res->decoded_content;
        	my $parsed = $me->parse_json(
@@ -242,6 +259,9 @@ sub oauth2 {
 	if (defined($me->{oauth2})) {
 		return $me->{oauth2};
 	}
+
+	my $headers = HTTP::Headers->new;
+	$headers->header('CB-VERSION' => $me->cbversion);
 
 	my ($id,$secret,$token_string);
 	open(N,$me->conf);
@@ -290,6 +310,8 @@ sub oauth2 {
 		save_tokens_args => [ $me ],
 
 		token_string => $me->token_string,
+
+		default_headers => $headers,
 	);
 	if (!defined($me->token_string)) {
 		my $scope = $me->scopes;
@@ -324,7 +346,7 @@ sub oauth2 {
 		};
 		if ($@) {
 			print STDERR "request_tokens: ".$@."\n";
-			exit(1);
+			return undef;
 		}
 	}
 	$me->token_string($me->oauth2()->token_string);
@@ -351,7 +373,8 @@ sub get_accounts {
 
 sub get_spot_price {
 	my ($me,$currency) = @_;
-	$me->get(call => '/prices/spot', parms => 'currency='.$currency);
+	my $cp = "BTC-".$currency;
+	$me->get(call => "/prices/$cp/spot");
 }
 
 sub get_user_auth {
